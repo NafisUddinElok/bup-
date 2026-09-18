@@ -97,8 +97,9 @@ export async function interpretOperatorNotes(operatorNotes, battery) {
 
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
+          const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
           const response = await ai.models.generateContent({
-            model: 'gemini-3.6-flash',
+            model: modelName,
             contents: userMessage,
             config: {
               systemInstruction: systemPrompt,
