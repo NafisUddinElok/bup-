@@ -8,7 +8,6 @@
 [![Docker](https://img.shields.io/badge/Docker-Fallback%20Image%20Ready-2496ED.svg)](https://www.docker.com/)
 [![Tests](https://img.shields.io/badge/Sample%20Cases-10%2F10%20Passed%20(100%25)-brightgreen.svg)]()
 [![Offline Tests](https://img.shields.io/badge/Offline%20Fallback-10%2F10%20Passed%20(100%25)-brightgreen.svg)]()
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 An intelligent, multi-objective energy management system designed for smart university campuses. **GridWise LLM** bridges unstructured natural-language operator instructions with deterministic mathematical programming to achieve cost-optimal, peak-shaved, and constraint-compliant 24-hour microgrid dispatch schedules.
 
@@ -473,9 +472,3 @@ npm test
 - **WASM Acceleration**: Solves complex 24-step LP models in **under 15 ms** directly inside the Node.js V8 runtime without spawning external Python or native C processes.
 - **Graceful Fault Handling**: Built-in exponential backoff retries for LLM calls and automatic fallback ensures high availability under network jitter or transient rate limits.
 - **Production-Ready Logging**: Structured JSON / console logger powered by Winston with request correlation and timing metrics.
-
----
-
-## 📄 License
-
-This project is licensed under the [MIT License](LICENSE).
