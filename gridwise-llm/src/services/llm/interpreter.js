@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type } from '@google/genai';
 import { buildPrompt } from './prompts.js';
+import { fallbackInterpretAll } from './fallback.js';
 import { validateDirectives } from '../guardrails/validator.js';
 import logger from '../../utils/logger.js';
 
@@ -72,51 +73,65 @@ const directiveResponseSchema = {
 };
 
 /**
- * Interpret operator notes using Gemini LLM.
+ * Interpret operator notes using Gemini LLM, with automatic fallback to deterministic rules
+ * if the API key is missing or the remote service is unreachable.
+ *
  * @param {string[]} operatorNotes - Array of 1-3 natural language notes
  * @param {object} battery - Battery configuration from request
  * @returns {Promise<Array>} Validated directive interpretations
  */
 export async function interpretOperatorNotes(operatorNotes, battery) {
-  const ai = getClient();
-  const { systemPrompt, userMessage } = buildPrompt(operatorNotes, battery);
-
-  logger.info(`Interpreting ${operatorNotes.length} operator note(s) via Gemini`);
-
   let rawResult;
-  const maxRetries = 2;
+  const apiKey = process.env.GEMINI_API_KEY;
 
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+  if (!apiKey) {
+    logger.warn('GEMINI_API_KEY is not configured. Engaging offline deterministic fallback interpreter.');
+    rawResult = fallbackInterpretAll(operatorNotes, battery);
+  } else {
     try {
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.6-flash',
-        contents: userMessage,
-        config: {
-          systemInstruction: systemPrompt,
-          responseMimeType: 'application/json',
-          responseSchema: directiveResponseSchema,
-          temperature: 0.1,
-          thinkingConfig: {
-            thinkingBudget: 0
-          }
-        }
-      });
+      const ai = getClient();
+      const { systemPrompt, userMessage } = buildPrompt(operatorNotes, battery);
 
-      const text = response.text;
-      rawResult = JSON.parse(text);
-      logger.info('Gemini response parsed successfully');
-      break;
-    } catch (err) {
-      logger.error(`Gemini API attempt ${attempt} failed: ${err.message}`);
-      if (attempt === maxRetries) {
-        throw new Error(`LLM interpretation failed after ${maxRetries} attempts: ${err.message}`);
+      logger.info(`Interpreting ${operatorNotes.length} operator note(s) via Gemini`);
+      const maxRetries = 2;
+
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          const response = await ai.models.generateContent({
+            model: 'gemini-3.6-flash',
+            contents: userMessage,
+            config: {
+              systemInstruction: systemPrompt,
+              responseMimeType: 'application/json',
+              responseSchema: directiveResponseSchema,
+              temperature: 0.1,
+              thinkingConfig: {
+                thinkingBudget: 0
+              }
+            }
+          });
+
+          const text = response.text;
+          rawResult = JSON.parse(text);
+          logger.info('Gemini response parsed successfully');
+          break;
+        } catch (err) {
+          logger.error(`Gemini API attempt ${attempt} failed: ${err.message}`);
+          if (attempt === maxRetries) {
+            logger.warn(`Gemini API failed after ${maxRetries} attempts. Engaging offline deterministic fallback.`);
+            rawResult = fallbackInterpretAll(operatorNotes, battery);
+            break;
+          }
+          await new Promise(r => setTimeout(r, 1000 * attempt));
+        }
       }
-      // Wait before retry (exponential backoff)
-      await new Promise(r => setTimeout(r, 1000 * attempt));
+    } catch (err) {
+      logger.warn(`Gemini client error: ${err.message}. Engaging offline deterministic fallback.`);
+      rawResult = fallbackInterpretAll(operatorNotes, battery);
     }
   }
 
-  // Run guardrails on LLM output
+  // Run guardrails on output
   const validated = validateDirectives(rawResult, operatorNotes.length, battery);
   if (!validated.success) {
     logger.error(`Directive validation failed: ${validated.error}`);

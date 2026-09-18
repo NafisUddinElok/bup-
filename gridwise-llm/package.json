@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "test": "node test/validate-samples.js"
+    "test": "node test/validate-samples.js",
+    "test:offline": "node test/test-end-to-end-offline.js",
+    "test:all": "npm test && npm run test:offline"
   },
   "keywords": ["energy", "optimization", "llm", "gridwise"],
   "license": "MIT",
