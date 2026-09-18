@@ -1,0 +1,25 @@
+{
+  "name": "gridwise-llm",
+  "version": "1.0.0",
+  "description": "LLM-Assisted Smart Campus Energy Optimization — BUP CSE Fest 2026",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "test": "node test/validate-samples.js"
+  },
+  "keywords": ["energy", "optimization", "llm", "gridwise"],
+  "license": "MIT",
+  "dependencies": {
+    "@google/genai": "^1.0.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "glpk.js": "^4.0.1",
+    "winston": "^3.14.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}
