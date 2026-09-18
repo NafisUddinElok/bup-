@@ -65,8 +65,8 @@ Modern university campuses feature hybrid energy assets including rooftop photov
 - **Robust Operator Note Interpretation**: Employs `@google/genai` (Gemini Flash) with temperature `0.1` and zero thinking budget for sub-second, highly consistent classification and entity extraction.
 - **Fail-Safe Guardrails**: Schema enforcement via `zod` and custom domain validators that detect invalid bounds, normalize time windows, prevent conflicting directives, and gracefully fall back to `no_op` on anomalies.
 - **Exact Linear Programming (LP)**: Solves the 24-hour dispatch schedule to global mathematical optimality in single-digit milliseconds using WebAssembly-compiled GLPK.
-- **Peak Demand Shaving**: Optimizes for both direct energy cost and a minimax auxiliary variable $\text{peak\_grid}$ to prevent costly campus peak power penalties.
-- **Anti-Churn Regularization**: Eliminates non-physical simultaneous charge/discharge cycles and spurious micro-cycling with an $\epsilon$-regularized objective.
+- **Peak Demand Shaving**: Optimizes for both direct energy cost and an auxiliary minimax variable ($P_{\text{grid}}$) to prevent costly campus peak power penalties.
+- **Anti-Churn Regularization**: Eliminates non-physical simultaneous charge/discharge cycles and spurious micro-cycling with an $\varepsilon$-regularized objective ($10^{-5}$).
 - **Zero Battery Drift (End-of-Day Neutrality)**: Enforces $E_{23} = E_{\text{initial}}$, ensuring sustainable day-to-day operation.
 - **Autonomous Audit Engine**: Re-verifies energy balance, solar caps, battery C-rates, SOC bounds, and active directive compliance post-solve.
 - **100% Benchmark Accuracy**: Passes all 10/10 official BUP preliminary sample scenarios with exact cost and grid figures.
@@ -107,43 +107,136 @@ flowchart TD
 
 ## 📐 Mathematical Optimization (LP Formulation)
 
-The optimization engine formulates the 24-hour energy dispatch as a Linear Program (LP):
+The optimization engine models the 24-hour campus energy dispatch as a Linear Program (LP) solved to global mathematical optimality via WebAssembly GLPK.
 
-### 1. Decision Variables (for each hour $h \in \{0, 1, \dots, 23\}$)
-- $G_h \ge 0$: Grid energy purchased during hour $h$ ($\text{kWh}$)
-- $S_h \ge 0$: Solar energy utilized during hour $h$ ($\text{kWh}$)
-- $C_h \ge 0$: Battery energy charged during hour $h$ ($\text{kWh}$)
-- $D_h \ge 0$: Battery energy discharged during hour $h$ ($\text{kWh}$)
-- $E_h \ge 0$: Battery state-of-charge at the end of hour $h$ ($\text{kWh}$)
-- $P_{\text{grid}} \ge 0$: Peak grid demand across all 24 hours ($\text{kWh/h}$)
+### 1. Decision Variables
 
-### 2. Objective Function
-$$\min \sum_{h=0}^{23} \left( \text{tariff}_h \cdot G_h + 10^{-5} \cdot (C_h + D_h) \right) + 10^{-4} \cdot P_{\text{grid}}$$
+For each hour $h \in \{0, 1, \dots, 23\}$, the solver determines the following continuous non-negative variables:
 
-- **Primary Goal**: Minimize total electricity purchase cost in Bangladeshi Taka (BDT).
-- **Secondary Goal ($10^{-4} \cdot P_{\text{grid}}$)**: Peak-shaving incentive to smooth high-demand hours.
-- **Regularization ($10^{-5} \cdot (C_h + D_h)$)**: Prevents simultaneous charging and discharging and suppresses wasteful battery wear.
+| Variable | Bounds | Unit | Physical Interpretation |
+|:---:|:---:|:---:|---|
+| $G_h$ | $[0, \infty)$ | kWh | Electricity purchased and imported from the utility grid |
+| $S_h$ | $[0, S_h^{\text{eff}}]$ | kWh | Rooftop solar PV generation consumed directly on campus |
+| $C_h$ | $[0, C_h^{\max}]$ | kWh | Energy charged into the Battery Energy Storage System (BESS) |
+| $D_h$ | $[0, D_h^{\max}]$ | kWh | Energy discharged from the battery to serve campus load |
+| $E_h$ | $[E_h^{\min}, E_{\text{cap}}]$ | kWh | State-of-charge (energy stored in battery) at the end of hour $h$ |
+| $P_{\text{grid}}$ | $[0, \infty)$ | kWh/h | Minimax auxiliary variable tracking 24-hour peak grid demand |
 
-### 3. Constraints
-1. **Energy Balance** (every hour $h$):
-   $$G_h + S_h + D_h - C_h = \text{demand}_h$$
-2. **Solar Availability Bound**:
-   $$0 \le S_h \le \text{effective\_solar}_h$$
-   *(where $\text{effective\_solar}_h = \text{solar}_h \times \text{factor}$ if a solar reduction directive is active)*
-3. **Battery Storage Dynamics**:
-   $$E_0 = E_{\text{initial}} + C_0 - D_0 \quad (h=0)$$
-   $$E_h = E_{h-1} + C_h - D_h \quad (\forall h \in \{1, \dots, 23\})$$
-4. **Battery Energy Capacity & Reserve Limits**:
-   $$\max(\text{minimum\_energy}, \text{reserve}_h) \le E_h \le \text{capacity}$$
-5. **Charge and Discharge Rate Limits (C-Rate)**:
-   $$0 \le C_h \le \text{max\_charge}_h \quad (\text{forced to } 0 \text{ during no-charge windows})$$
-   $$0 \le D_h \le \text{max\_discharge}_h \quad (\text{forced to } 0 \text{ during no-discharge windows})$$
-6. **Peak Grid Bound**:
-   $$G_h \le P_{\text{grid}} \quad (\forall h \in \{0, \dots, 23\})$$
-7. **Grid Import Ceiling**:
-   $$G_h \le \text{max\_grid}_h \quad (\forall h \in \{0, \dots, 23\}, \text{ default } \infty)$$
-8. **End-of-Day Neutrality**:
-   $$E_{23} = E_{\text{initial}}$$
+---
+
+### 2. Multi-Objective Function
+
+The objective minimizes total grid electricity expenditure, penalizes peak power spikes (peak shaving), and regularizes battery cycling to suppress cell degradation:
+
+$$
+\min \quad \sum_{h=0}^{23} \Big( \text{Tariff}_h \cdot G_h + 10^{-5} \cdot (C_h + D_h) \Big) + 10^{-4} \cdot P_{\text{grid}}
+$$
+
+**Objective Breakdown**:
+- **Energy Purchase Cost** ($\sum_{h=0}^{23} \text{Tariff}_h \cdot G_h$): Direct campus electricity expenditure in Bangladeshi Taka (BDT).
+- **Peak Shaving Incentive** ($10^{-4} \cdot P_{\text{grid}}$): Minimax penalty that flattens grid draw across high-demand hours.
+- **Cycle Wear Regularization** ($10^{-5} \cdot (C_h + D_h)$): Small $\varepsilon$-penalty that guarantees non-simultaneous charging and discharging, preventing wasteful micro-cycling.
+
+---
+
+### 3. Operational Constraints
+
+#### Constraint 1: Hourly Energy Balance (Kirchhoff's Energy Law)
+Every hour $h \in \{0, 1, \dots, 23\}$, total campus generation and import must exactly meet total consumption and storage:
+
+$$
+G_h + S_h + D_h - C_h = \text{Demand}_h
+$$
+
+*(Equivalently: $\text{Grid} + \text{Solar} + \text{Battery Discharge} = \text{Campus Load} + \text{Battery Charge}$)*
+
+---
+
+#### Constraint 2: Effective Solar Availability
+Solar consumption cannot exceed actual physical generation after factoring in active weather or maintenance curtailments:
+
+$$
+0 \le S_h \le S_h^{\text{eff}} \quad \forall h \in \{0, 1, \dots, 23\}
+$$
+
+Where:
+- $S_h^{\text{eff}} = \text{solar}_h \times \text{factor}$ during active `solar_reduction` hours ($0 \le \text{factor} \le 1$).
+- $S_h^{\text{eff}} = \text{solar}_h$ during normal operational hours.
+
+---
+
+#### Constraint 3: Battery Storage Dynamics (State Transitions)
+The battery state of charge updates each hour based on net charging and discharging:
+
+$$
+E_0 = E_{\text{initial}} + C_0 - D_0 \quad (h = 0)
+$$
+
+$$
+E_h = E_{h-1} + C_h - D_h \quad \forall h \in \{1, 2, \dots, 23\}
+$$
+
+---
+
+#### Constraint 4: Battery Energy Capacity & Reserve Limits
+Battery storage must operate within manufacturer capacity ratings while respecting active emergency reserves:
+
+$$
+E_h^{\min} \le E_h \le E_{\text{cap}} \quad \forall h \in \{0, 1, \dots, 23\}
+$$
+
+Where the effective minimum reserve threshold is:
+
+$$
+E_h^{\min} = \max(E^{\min}, E_h^{\text{reserve}})
+$$
+
+*(Here $E^{\min}$ is `battery.minimum_energy_kwh` and $E_h^{\text{reserve}}$ is the active directive requirement)*
+
+---
+
+#### Constraint 5: Battery Charge and Discharge Rate Limits (C-Rate)
+Power flow through the inverter is bounded by physical hardware ratings and forced to zero during maintenance windows:
+
+$$
+0 \le C_h \le C_h^{\max} \quad \forall h \in \{0, 1, \dots, 23\}
+$$
+
+$$
+0 \le D_h \le D_h^{\max} \quad \forall h \in \{0, 1, \dots, 23\}
+$$
+
+- $C_h^{\max} = 0$ during active `no_charge_window` hours; otherwise $C_h^{\max} = \text{MaxCharge}$ (`max_charge_kwh_per_hour`).
+- $D_h^{\max} = 0$ during active `no_discharge_window` hours; otherwise $D_h^{\max} = \text{MaxDischarge}$ (`max_discharge_kwh_per_hour`).
+
+---
+
+#### Constraint 6: Peak Grid Demand Bound (Minimax Linearization)
+The auxiliary variable $P_{\text{grid}}$ bounds the maximum hourly grid draw across the entire 24-hour cycle:
+
+$$
+G_h \le P_{\text{grid}} \quad \forall h \in \{0, 1, \dots, 23\}
+$$
+
+---
+
+#### Constraint 7: Grid Import Ceilings (Transformer & Feeder Protection)
+Protects substation equipment and feeder lines during scheduled grid constraint windows:
+
+$$
+G_h \le G_h^{\max} \quad \forall h \in \{0, 1, \dots, 23\}
+$$
+
+Where $G_h^{\max}$ equals `max_grid_kwh` during active `max_grid_window` hours, and $\infty$ otherwise.
+
+---
+
+#### Constraint 8: End-of-Day Neutrality Guarantee
+To ensure sustainable continuous operations day after day, the battery must finish the 24-hour cycle at its initial energy level:
+
+$$
+E_{23} = E_{\text{initial}}
+$$
 
 ---
 
@@ -153,7 +246,7 @@ $$\min \sum_{h=0}^{23} \left( \text{tariff}_h \cdot G_h + 10^{-5} \cdot (C_h + D
 
 | Directive Type | Description | Required Parameters |
 |---|---|---|
-| `solar_reduction` | Curtails solar production during specific hours due to cleaning, weather, or shading. | `hours: number[]`, `factor: number` ($0 \le \text{factor} \le 1$, remaining usable fraction) |
+| `solar_reduction` | Curtails solar production during specific hours due to cleaning, weather, or shading. | `hours: number[]`, `factor: number` (0.0 to 1.0, remaining usable fraction) |
 | `minimum_battery_reserve` | Elevates minimum allowed battery energy during target hours (emergency staging). | `hours: number[]`, `minimum_energy_kwh: number` |
 | `no_charge_window` | Blocks battery charging during maintenance or peak grid stress windows. | `hours: number[]` |
 | `no_discharge_window` | Blocks battery discharging during equipment testing or asset protection. | `hours: number[]` |
@@ -162,9 +255,9 @@ $$\min \sum_{h=0}^{23} \left( \text{tariff}_h \cdot G_h + 10^{-5} \cdot (C_h + D
 
 ### Time Window Semantics
 All operational time windows follow **start-inclusive, end-exclusive** integer hour indexing:
-- *"from 1 PM to 3 PM"* $\rightarrow$ `hours: [13, 14]`
-- *"from noon until 2 PM"* $\rightarrow$ `hours: [12, 13]`
-- *"from 6 PM until 10 PM"* $\rightarrow$ `hours: [18, 19, 20, 21]`
+- *"from 1 PM to 3 PM"* → `hours: [13, 14]`
+- *"from noon until 2 PM"* → `hours: [12, 13]`
+- *"from 6 PM until 10 PM"* → `hours: [18, 19, 20, 21]`
 
 ### Autonomous Offline Fallback Engine
 To ensure high availability and resilient judging, GridWise includes an automated deterministic fallback parser:
